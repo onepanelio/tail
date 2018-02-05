@@ -62,6 +62,7 @@ type Config struct {
 	MustExist   bool      // Fail early if the file does not exist
 	Poll        bool      // Poll for file changes instead of using inotify
 	Pipe        bool      // Is a named pipe (mkfifo)
+	ByChar      bool
 	RateLimiter *ratelimiter.LeakyBucket
 
 	// Generic IO
@@ -207,6 +208,21 @@ func (tail *Tail) reopen() error {
 	return nil
 }
 
+func (tail *Tail) readRune() (string, error) {
+	tail.lk.Lock()
+	r, _, err := tail.reader.ReadRune()
+	s := string(r)
+	tail.lk.Unlock()
+	if err != nil {
+		// Note ReadString "returns the data read before the error" in
+		// case of an error, including EOF, so we return it as is. The
+		// caller is expected to process it if err is EOF.
+		return s, err
+	}
+
+	return s, err
+}
+
 func (tail *Tail) readLine() (string, error) {
 	tail.lk.Lock()
 	line, err := tail.reader.ReadString('\n')
@@ -252,6 +268,7 @@ func (tail *Tail) tailFileSync() {
 
 	var offset int64
 	var err error
+	var line string
 
 	// Read line by line.
 	for {
@@ -265,7 +282,11 @@ func (tail *Tail) tailFileSync() {
 			}
 		}
 
-		line, err := tail.readLine()
+		if tail.Config.ByChar {
+			line, err = tail.readRune()
+		} else {
+			line, err = tail.readLine()
+		}
 
 		// Process `line` even if err is EOF.
 		if err == nil {
